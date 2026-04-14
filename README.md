@@ -2,7 +2,8 @@ This repository contains the source code and project documentation for my person
 
 The goal of this project is to build a complete, multi-tiered website that serves as a public portfolio, a private file drive, and a community forum. While it is a solo project, it is structured and documented like a standard development project.
 
-Access and Features
+Access and Features:
+
 The site is divided into three access levels:
 
 	Public Access
@@ -23,7 +24,8 @@ The site is divided into three access levels:
 
 		Personal Blog: A private space for notes and personal writing.
 
-Tech Stack
+Tech Stack:
+
 The architecture is split to handle static pages, server-side logic, and database management efficiently.
 
 	Domain: adarshsadanand.in
@@ -36,10 +38,12 @@ The architecture is split to handle static pages, server-side logic, and databas
 
 	Scripting & Logic: Python and JavaScript/TypeScript (depending on Vercel serverless function requirements).
 
-Project Guidelines
+Project Guidelines:
+
 	To maintain a clean and usable project, all code, documentation, and user interfaces must adhere to the following rules:
 
-Documentation
+Documentation:
+
 To treat this as a formal development project, the software development lifecycle is documented in the /QMS folder.
 
 	BRD (Business Requirements Document): What the site needs to achieve.
@@ -52,7 +56,8 @@ To treat this as a formal development project, the software development lifecycl
 
 	Test Results: The checklist for bug tracking, QA, and testing the login tiers.
 
-Local Development
+Local Development:
+
 	Clone the repository.
 
 	Install dependencies (refer to package manager instructions in the root).
