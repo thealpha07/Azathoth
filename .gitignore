@@ -1,0 +1,10 @@
+# Node & Dependencies
+node_modules/
+
+# Environment Variables
+.env
+.env.local
+
+# Editor & Local Settings
+.obsidian/
+docs/.obsidian/
