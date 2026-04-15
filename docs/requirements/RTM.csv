@@ -1,9 +1,9 @@
-Req IDBusiness Req (BRD)Functional Req (FRD)Technical Req (TRD)Target ReleaseTest Case IDStatus
-BRD-01Public Portfolio & Asset RetrievalTBDTBDv1.0TBDPending
-BRD-02Public Discussion ForumTBDTBDv1.0TBDPending
-BRD-03Unified Access ControlTBDTBDv1.0TBDPending
-BRD-04Tiered File VaultTBDTBDv1.0TBDPending
-BRD-05Private Media GalleryTBDTBDv1.0TBDPending
-BRD-06Admin Publishing ModuleTBDTBDv1.0TBDPending
-BRD-07Inbound CommunicationsTBDTBDv1.0TBDPending
-BRD-08Audit & Governance LoggingTBDTBDv1.0TBDPending
+Req ID,Business Req (BRD),Functional Req (FRD),Technical Req (TRD),Target Release,Test Case ID,Status
+BRD-01,Public Portfolio & Asset Retrieval,TBD,TBD,v1.0,TBD,Pending
+BRD-02,Public Discussion Forum,TBD,TBD,v1.0,TBD,Pending
+BRD-03,Unified Access Control,TBD,TBD,v1.0,TBD,Pending
+BRD-04,Tiered File Vault,TBD,TBD,v1.0,TBD,Pending
+BRD-05,Private Media Gallery,TBD,TBD,v1.0,TBD,Pending
+BRD-06,Admin Publishing Module,TBD,TBD,v1.0,TBD,Pending
+BRD-07,Inbound Communications,TBD,TBD,v1.0,TBD,Pending
+BRD-08,Audit & Governance Logging,TBD,TBD,v1.0,TBD,Pending
