@@ -1,7 +1,7 @@
 # Functional Requirements Document
 **Project Name:** Azathoth 
 **Document Owner:** Adarsh Sadanand (Admin / Developer)  
-**Status:** Draft v1.0  
+**Status:** Draft v1.1  
 
 ## 1. User Role Matrix
 This matrix defines the baseline permissions across the platform's three access tiers. These rules govern all functional modules.
