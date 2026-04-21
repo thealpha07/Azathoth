@@ -1,3 +1,4 @@
+# adarshsadanand.in
 
 This repository contains the source code and project documentation for my personal web platform, live at [adarshsadanand.in](https://adarshsadanand.in).
 
@@ -20,17 +21,19 @@ The site is divided into three access levels:
 ### Personal Login (Admin)
 * **Drive:** Secure cloud storage for personal files, college documents, MTech coursework, and resumes.
 * **Personal Blog:** A private space for notes and personal writing.
+* **Remote Workspace:** Clientless, web-based remote access to an OCI-hosted Ubuntu system using Apache Guacamole.
 
 ---
 
 ## Tech Stack
 
-The architecture is split to handle static pages, server-side logic, and database management efficiently.
+The architecture is split to handle static pages, server-side logic, database management, and remote environments efficiently.
 
 * **Domain:** adarshsadanand.in
 * **Frontend Hosting:** GitHub Pages (for static and public-facing pages).
 * **Application Hosting:** Vercel (for dynamic routing and API handling).
 * **Backend & Database:** Supabase (utilizing PostgreSQL for user authentication, file storage metadata, and forum data).
+* **Remote Infrastructure:** Oracle Cloud Infrastructure (OCI) hosting an Ubuntu instance, accessible via Apache Guacamole.
 * **Scripting & Logic:** Python and JavaScript/TypeScript (depending on Vercel serverless function requirements).
 
 ---
@@ -38,6 +41,7 @@ The architecture is split to handle static pages, server-side logic, and databas
 ## Project Guidelines
 
 To maintain a clean and usable project, all code, documentation, and user interfaces must adhere to the following rules:
+
 * Write clearly and directly in plain English.
 * Use exactly one highly readable font family across the entire site.
 * Maintain generous, consistent padding and margin.
