@@ -181,7 +181,7 @@ To prevent unauthorized bulk scraping or data manipulation, security is enforced
 2. **Concurrent Bulk Writes:** The system uses transaction blocks (`BEGIN` ... `COMMIT`) when handling multi-table operations (e.g., uploading a file to storage AND writing to `vault_metadata`). If the storage upload fails, the database write automatically rolls back, maintaining perfect atomicity.
 3. **Pagination & Load Limits:** All `SELECT` queries against `forum_posts` and `audit_logs` are strictly paginated using `LIMIT` and `OFFSET` to prevent Out Of Memory (OOM) errors during bulk retrieval.
 
-### 5.4. Threat Mitigation & Database Defense
+### 5.4. Threat Mitigation & Database Defence
 
 To maintain strict governance and protect against common web vulnerabilities (OWASP Top 10), the database and API layers enforce the following defensive protocols:
 
@@ -195,5 +195,118 @@ To maintain strict governance and protect against common web vulnerabilities (OW
 To ensure continuous operation and compliance with standard data privacy frameworks, the database layer enforces strict lifecycle and availability controls.
 
 * **High Availability & Disaster Recovery (DR):** The PostgreSQL database utilizes Write-Ahead Logging (WAL) to enable Point-in-Time Recovery (PITR). Automated physical backups are executed daily by the infrastructure provider, ensuring a strict Recovery Point Objective (RPO) of 24 hours in the event of catastrophic data corruption.
-* **Automated Log Rotation:** To prevent storage exhaustion and maintain query performance, system audit logs are subjected to automated lifecycle management. A `pg_cron` background worker executes a monthly cleanup script, archiving or permanently dropping records in the `audit_logs` table that exceed a 365-day retention period.
+
+* **Automated Log Rotation:** To prevent storage exhaustion and maintain query performance, system audit logs are subjected to automated lifecycle management. A `pg_cron` background worker executes a monthly clean-up script, archiving or permanently dropping records in the `audit_logs` table that exceed a 365-day retention period.
+
 * **PII Sanitization & The Right to be Forgotten (RTBF):** The schema is designed to respect user privacy while maintaining referential integrity. When an authenticated Associate requests account deletion, a cascading database function is triggered. This function permanently purges the user's Personally Identifiable Information (PII) from the `profiles` table. Associated relational records, such as `forum_posts`, are retained to preserve community thread context, but their `author_id` is irreversibly nullified, rendering the data fully anonymized.
+
+## 6. API Architecture & Middleware
+
+The application utilizes a bifurcated API strategy. Standard CRUD operations leverage the Supabase PostgREST client for low-latency, RLS-secured database interactions. Complex business logic, secure proxying, and edge routing are handled by Vercel Serverless Functions.
+
+### 6.1. Vercel Serverless Endpoints (Custom Logic)
+
+These endpoints execute in secure Node.js environments. They are protected by Vercel's Edge rate-limiting and handle operations requiring secure secrets not exposed to the client.
+
+#### 1. Inbound Communications
+* **Endpoint:** `POST /api/contact`
+* **Purpose:** Receives payload from the public Portfolio "Contact Me" form, sanitizes the input, and executes a service-role insertion into the `inquiries` table.
+* **Payload Structure:**
+  ```json
+  {
+    "name": "string (max 100)",
+    "email": "string (valid email format)",
+    "message": "string (max 1000)"
+  }
+  ```
+- **Response Codes:**
+    - `200 OK`: Message accepted and stored.
+    - `429 Too Many Requests`: Rate limit exceeded (mitigates spam).
+    - `400 Bad Request`: Malformed email or missing fields.
+
+#### 2. Remote Gateway Proxy (Guacamole)
+
+- **Endpoint:** `GET /api/gateway/connect`
+- **Purpose:** Establishes a secure WebSocket/HTTP tunnel to the OCI Ubuntu instance.
+- **Security:** This endpoint mandates a valid Admin JWT. The Vercel function acts as a reverse proxy, translating the browser's HTML5 canvas commands into the Guacamole protocol, ensuring the OCI server's IP is never exposed to the client.
+- **Response:** Upgrades connection to WebSocket (101 Switching Protocols) or returns `403 Forbidden`.
+
+### 6.2. Edge Middleware & Routing Security
+
+Vercel Edge Middleware (`middleware.ts`) intercepts all incoming HTTP requests _before_ they hit the serverless functions or static pages. It acts as the platform's traffic cop.
+
+- **Execution Flow:**
+    1. Request arrives at `adarshsadanand.in/*`.
+    2. Middleware checks the requested path.
+    3. If the path is public (e.g., `/`, `/forum`, `/resume`), the request passes through immediately.
+    4. If the path is restricted (e.g., `/shared-vault`, `/admin-dashboard`), the middleware inspects the `sb-access-token` HTTP cookie.
+    5. The middleware cryptographically verifies the JWT signature.
+    6. If valid, it reads the `role_id`. If authorized, the request proceeds. If unauthorized or missing, the user is immediately redirected with a `302 Found` to `/login`.
+
+- **Performance Impact:** Edge execution occurs globally at the CDN node closest to the user, resulting in sub-50ms latency for auth rejections, protecting downstream compute resources.
+
+### 6.3. Supabase PostgREST Endpoints (Data Layer)
+
+The frontend React/Vanilla JS application interacts directly with Supabase for standard state management, completely bypassing Vercel compute to reduce costs and latency.
+
+- **`GET /rest/v1/forum_posts`:** Fetches active community threads. Appends `?limit=20&offset=0` for pagination. RLS ensures only `is_archived=false` records are returned.
+- **`POST /rest/v1/forum_posts`:** Client submits a new thread. The JWT is automatically passed in the `Authorization: Bearer <token>` header. The PostgreSQL database validates the token via RLS before committing the insert.
+
+## 7. Infrastructure, Deployment & CI/CD
+
+The deployment pipeline relies on strict separation of concerns to prevent secret leakage and ensure continuous availability across the decoupled stack.
+
+### 7.1. CI/CD Pipeline & Secret Management
+* **Frontend Build (GitHub Actions):** Pushes to the `main` branch trigger a static build process deployed to GitHub Pages.
+  * *Constraint Mitigation (Secret Leakage):* The GitHub environment is strictly injected with the Supabase `anon` key. The `service_role` key is explicitly banned from the GitHub repository secrets to prevent accidental bundling into the public HTML.
+* **Backend Build (Vercel):** Pushes to the `main` branch trigger serverless function deployment.
+  * *Constraint Mitigation (CORS):* Vercel's `next.config.js` enforces strict Cross-Origin Resource Sharing (CORS), hard-dropping any `POST` or `GET` API requests that do not originate from `https://adarshsadanand.in`.
+
+### 7.2. Frontend Routing & State Management
+* **Routing Hack (SPA 404 Prevention):** Because GitHub Pages does not natively support Single Page Application (SPA) dynamic routing, a custom `404.html` script intercepts unmapped route requests (e.g., a direct link to `/admin-dashboard`), stores the requested path in `sessionStorage`, and redirects to the `index.html` root where the client-side router restores the intended view.
+* **Session State (Silent JWT Refresh):** To prevent data loss during long sessions (e.g., writing a blog post), the frontend implements Supabase's `onAuthStateChange`. A background worker silently requests a fresh JWT 5 minutes before expiry, ensuring authorized database transactions are not rejected due to timeouts.
+
+## 7. Infrastructure, Deployment & CI/CD Protocols
+
+The deployment architecture enforces absolute decoupling of the static presentation layer from the dynamic execution environment. Pipeline orchestration is governed by strict environment variable isolation.
+
+### 7.1. CI/CD Pipeline & Cryptographic Secret Management
+* **Frontend Build Pipeline (GitHub Actions):** * Triggered on `push` to `refs/heads/main`.
+  * Executes standard `npm run lint` and `npm run build` routines.
+  * **Secret Isolation Matrix:** The build environment is injected exclusively with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The `SUPABASE_SERVICE_ROLE_KEY` is explicitly omitted from the repository's CI context to prevent static bundle contamination.
+* **Backend Build Pipeline (Vercel):**
+  * Evaluates serverless functions against the Node.js 18.x runtime environment.
+  * **CORS Preflight Configuration:** The `next.config.js` and edge middleware enforce strict Cross-Origin Resource Sharing rules. All Vercel endpoints explicitly return the following headers, dropping unauthorized cross-origin requests at the Edge:
+    ```http
+    Access-Control-Allow-Origin: [https://adarshsadanand.in](https://adarshsadanand.in)
+    Access-Control-Allow-Methods: GET, POST, OPTIONS
+    Access-Control-Allow-Headers: Authorization, Content-Type, sb-access-token
+    ```
+
+### 7.2. Frontend Routing State & Token Lifecycle
+* **SPA 404 Interception (GitHub Pages):** GitHub Pages lacks native rewrite capabilities for Single Page Applications. A custom `404.html` acts as a proxy script. It captures `window.location.pathname`, serializes it into `sessionStorage`, and executes a `window.location.replace('/')`. The `index.html` root intercepts this payload and dynamically updates the DOM history tree via `window.history.replaceState()`.
+* **JWT Lifecycle Worker:** Authentication relies on short-lived stateless JWTs (3600-second TTL). The client implements a background worker bound to the `supabase.auth.onAuthStateChange` listener. At $T-300$ seconds (5 minutes prior to token expiration), the worker issues an asynchronous `POST /auth/v1/token?grant_type=refresh_token` request to ensure uninterrupted `INSERT`/`UPDATE` capabilities during long-lived DOM sessions (e.g., editing the Private Blog).
+
+## 8. Remote Gateway & OCI Infrastructure Tunnelling
+
+The remote gateway architecture circumvents standard serverless TCP constraints by utilizing a decoupled WebSocket reverse proxy strategy, ensuring low-latency RDP/SSH translation for development workloads.
+
+### 8.1. Guacamole Daemon & Reverse Proxy Topography
+* **Constraint:** Vercel Serverless Functions enforce a hard execution timeout (10s–60s) and cannot sustain the persistent bidirectional WebSocket stream required by the `guacd` (Guacamole proxy daemon).
+* **Network Implementation:** * The Vercel API (`/api/gateway/connect`) is restricted solely to JWT validation and issuing a one-time cryptographic handshake.
+  * The OCI Ubuntu instance operates the `guacd` service locally.
+  * A `cloudflared` daemon (Cloudflare Tunnel) is installed on the OCI instance, establishing an outbound-only HTTPS tunnel to the Cloudflare edge network.
+  * The client browser establishes a direct `Upgrade: websocket` connection via the tunnel, completely bypassing Vercel compute.
+
+### 8.2. Infrastructure Retention & Egress Throttling
+* **OCI "Always Free" Synthetic Load Generator:** To prevent Oracle Cloud Infrastructure from classifying the ARM Ampere A1 instance as "idle" (triggering forced reclamation at <10% utilization), a local `cron` job executes a synthetic CPU load. 
+  * *Execution:* `0 2 * * * /usr/bin/stress-ng --cpu 2 --timeout 300s` (Forces 5 minutes of multi-core load daily).
+* **Cold Start Prevention:** A GitHub Action `cron` worker executes a synthetic `GET` request to the API gateway and a `SELECT 1` query to Supabase every 12 hours, ensuring the compute instances and database connection pools remain resident in memory.
+* **Egress Rate Limiting:** The Guacamole connection daemon is configured with a strict `client-timeout=900` (15 minutes). The Supabase Storage buckets enforce an `upload_size_limit` of 52428800 bytes (50MB) via RLS configurations to prevent outbound bandwidth exhaustion.
+
+## 9. Database Connection Pooling Topology
+
+* **Constraint:** Serverless environments exhibit high horizontal concurrency. Direct TCP connections to PostgreSQL (Port 5432) will cause connection queue exhaustion (OOM/Lockup) under load.
+* **Implementation:** The architecture utilizes **Supavisor** (a scalable connection pooler written in Elixir) operating in **Transaction Mode**. 
+  * Vercel functions must explicitly target port `6543` (the IPv4 pooler port) rather than the direct database engine.
+  * Transaction mode ensures that a database connection is acquired only for the duration of a single `BEGIN ... COMMIT` block, returning immediately to the pool. This allows 15 active database connections to safely multiplex over 1,000 concurrent serverless function invocations.
