@@ -1,8 +1,8 @@
 # Technical Requirements Document (TRD)
-**Project:** Azathoth (adarshsadanand.in)  
-**Version:** v3.2 (Production-Ready, Constraint-Aware, Hardened with Trap Mitigations)  
+**Project:** Azathoth 
+**Version:** v3.1
 **Status:** Architecture Baseline  
-**Author:** Aditya (System Architecture / Developer)  
+**Author:** 
 
 ## 1. Architecture Overview
 Azathoth is a serverless-first, edge-mediated web platform designed for a personal portfolio with a community forum, role-based shared vault, and secure remote development access. It prioritizes:
