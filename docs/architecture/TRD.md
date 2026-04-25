@@ -105,3 +105,95 @@ To protect against both volumetric (Layer 3/4) and application-layer (Layer 7) a
 * **Infrastructure Layer (OCI & Guacamole):**
   * The Oracle Cloud Virtual Cloud Network (VCN) Security Lists are configured to silently drop all external ICMP (Ping) requests and block all inbound TCP/UDP traffic.
   * The only allowed ingress traffic is restricted to the specific IP ranges of the Vercel deployment, making the Guacamole server completely "dark" to public internet scanners and botnets.
+
+## 5. Database Schema & Data Architecture
+
+The database is built on PostgreSQL. To guarantee atomicity and handle bulk data efficiently, the schema strictly avoids JSONB blobs for relational data, enforces foreign key constraints to prevent orphaned records, and utilizes B-Tree indexing on all query-heavy columns.
+
+### 5.1. Core Tables & Normalization
+
+#### Table: `profiles`
+Maps to the hidden Supabase `auth.users` system table. Stores public and RBAC data.
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `uuid` | PK, FK (`auth.users.id`) CASCADE | Primary identifier. |
+| `role` | `varchar(20)` | NOT NULL, DEFAULT 'public' | Enforces RBAC (`public`, `associate`, `admin`). |
+| `display_name` | `varchar(50)` | NOT NULL | Publicly visible name for forum posts. |
+| `created_at` | `timestamptz` | NOT NULL, DEFAULT `now()` | Timezone-aware creation timestamp. |
+
+#### Table: `forum_posts`
+Stores all community discussions. Normalized to ensure rapid bulk querying without duplicating user data.
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `uuid` | PK, DEFAULT `uuid_generate_v4()` | Unique post identifier. |
+| `author_id` | `uuid` | FK (`profiles.id`) SET NULL | Links post to author. Becomes NULL if user deleted. |
+| `title` | `varchar(150)` | NOT NULL | Post header. |
+| `body` | `text` | NOT NULL | Sanitized Markdown/text payload. |
+| `is_archived` | `boolean` | DEFAULT `false` | Soft-delete flag. Preserves data atomicity. |
+| `created_at` | `timestamptz`| NOT NULL, DEFAULT `now()` | Timestamp of post. |
+
+*Index Strategy:* B-Tree index on `created_at` (DESC) and `author_id` to handle bulk loading on the forum frontend.
+
+#### Table: `vault_metadata`
+Stores metadata for files hosted in Supabase Storage. Separating metadata from physical storage ensures the database remains highly performant during bulk file operations.
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `uuid` | PK, DEFAULT `uuid_generate_v4()` | Unique file identifier. |
+| `storage_path` | `text` | NOT NULL, UNIQUE | Exact path in the Supabase Storage bucket. |
+| `file_name` | `varchar(255)` | NOT NULL | Human-readable name. |
+| `access_tier`| `varchar(20)` | NOT NULL | Defines who can read it (`associate`, `admin`). |
+| `size_bytes` | `bigint` | NOT NULL | Used for storage quota calculations. |
+
+#### Table: `audit_logs`
+An append-only ledger tracking all authentication and data-modification events. Crucial for system governance.
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `log_id` | `bigserial` | PK | Sequential integer for rapid bulk inserts. |
+| `actor_id` | `uuid` | FK (`profiles.id`) | Who triggered the event (can be null for system). |
+| `action` | `varchar(50)` | NOT NULL | e.g., `LOGIN_FAILED`, `FILE_DELETED`, `POST_CREATED`. |
+| `ip_address` | `inet` | NULL | IPv4/IPv6 address of the actor. |
+| `timestamp` | `timestamptz`| NOT NULL, DEFAULT `now()` | Exact time of the event. |
+
+*Edge Case Mitigation:* If the system generates millions of logs, this table will be partitioned by month (`PARTITION BY RANGE (timestamp)`) to maintain query speed and allow for bulk archival of old logs.
+
+### 5.2. Row Level Security (RLS) Policies
+
+To prevent unauthorized bulk scraping or data manipulation, security is enforced at the database kernel level using RLS. Even if an API endpoint is compromised, the database will reject the query.
+
+* **`profiles` Table:**
+  * *Read:* `TRUE` (Everyone can read display names for the forum).
+  * *Update:* `auth.uid() = id` (Users can only update their own display name) OR `auth.jwt() ->> 'role' = 'admin'`.
+* **`forum_posts` Table:**
+  * *Read:* `is_archived = false` (Public can read active posts).
+  * *Insert:* `auth.uid() IS NOT NULL` (Must be authenticated).
+  * *Update/Delete:* `auth.uid() = author_id` OR `auth.jwt() ->> 'role' = 'admin'`.
+* **`vault_metadata` & Storage Buckets:**
+  * *Read (Associates):* `auth.jwt() ->> 'role' IN ('associate', 'admin') AND access_tier = 'associate'`.
+  * *Read (Admin):* `auth.jwt() ->> 'role' = 'admin'`.
+  * *Write/Delete:* `auth.jwt() ->> 'role' = 'admin'` (Only Admin can modify the vault).
+* **`audit_logs` Table:**
+  * *Read:* `auth.jwt() ->> 'role' = 'admin'` (Strictly Admin only).
+  * *Insert:* Executed via PostgreSQL Triggers with `SECURITY DEFINER` privileges. Users cannot manually insert or modify logs.
+  * *Update/Delete:* `FALSE` (Immutable table).
+
+### 5.3. Edge Case Handling & Data Integrity
+1. **Orphaned Data:** If a user account is deleted, their `forum_posts` are retained but `author_id` is set to `NULL` (via `ON DELETE SET NULL`), preserving the community thread context without violating foreign key constraints. 
+2. **Concurrent Bulk Writes:** The system uses transaction blocks (`BEGIN` ... `COMMIT`) when handling multi-table operations (e.g., uploading a file to storage AND writing to `vault_metadata`). If the storage upload fails, the database write automatically rolls back, maintaining perfect atomicity.
+3. **Pagination & Load Limits:** All `SELECT` queries against `forum_posts` and `audit_logs` are strictly paginated using `LIMIT` and `OFFSET` to prevent Out Of Memory (OOM) errors during bulk retrieval.
+
+### 5.4. Threat Mitigation & Database Defense
+
+To maintain strict governance and protect against common web vulnerabilities (OWASP Top 10), the database and API layers enforce the following defensive protocols:
+
+* **SQL Injection (SQLi) Prevention:** The system utilizes PostgREST for all database interactions. All API requests are automatically translated into parameterized queries (prepared statements). User input is never concatenated directly into executable SQL strings, rendering standard injection attacks mathematically impossible at the application layer.
+* **Insecure Direct Object Reference (IDOR) Prevention:** Resource IDs (UUIDs) are decoupled from access rights. Row Level Security (RLS) acts as a strict gatekeeper. Even if an attacker discovers the UUID of a restricted `vault_metadata` record, the PostgreSQL kernel will return a `404 Not Found` equivalent if the requester's JWT `role` does not match the required `access_tier`.
+* **Cross-Site Scripting (XSS) Mitigation:** All inputs targeting the `forum_posts` and `inquiries` tables undergo strict server-side sanitization to strip executable `<script>` tags and malicious HTML attributes before the `INSERT` transaction is committed.
+* **Cross-Site Request Forgery (CSRF) Mitigation:** Authentication state is managed via secure, `HttpOnly` cookies strictly bound to the `adarshsadanand.in` domain utilizing the `SameSite=Strict` attribute, preventing unauthorized cross-origin requests from utilizing an active session.
+
+### 5.5. Availability, Maintenance & GRC Protocols
+
+To ensure continuous operation and compliance with standard data privacy frameworks, the database layer enforces strict lifecycle and availability controls.
+
+* **High Availability & Disaster Recovery (DR):** The PostgreSQL database utilizes Write-Ahead Logging (WAL) to enable Point-in-Time Recovery (PITR). Automated physical backups are executed daily by the infrastructure provider, ensuring a strict Recovery Point Objective (RPO) of 24 hours in the event of catastrophic data corruption.
+* **Automated Log Rotation:** To prevent storage exhaustion and maintain query performance, system audit logs are subjected to automated lifecycle management. A `pg_cron` background worker executes a monthly cleanup script, archiving or permanently dropping records in the `audit_logs` table that exceed a 365-day retention period.
+* **PII Sanitization & The Right to be Forgotten (RTBF):** The schema is designed to respect user privacy while maintaining referential integrity. When an authenticated Associate requests account deletion, a cascading database function is triggered. This function permanently purges the user's Personally Identifiable Information (PII) from the `profiles` table. Associated relational records, such as `forum_posts`, are retained to preserve community thread context, but their `author_id` is irreversibly nullified, rendering the data fully anonymized.
