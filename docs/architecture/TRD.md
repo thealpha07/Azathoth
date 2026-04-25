@@ -1,12 +1,50 @@
 # Technical Requirements Document (TRD)
-**Project Name:** Azathoth 
-**Document Owner:**  Admin / Developer
-**Status:** Draft v1.0
+**Project:** Azathoth (adarshsadanand.in)  
+**Version:** v3.2 (Production-Ready, Constraint-Aware, Hardened with Trap Mitigations)  
+**Status:** Architecture Baseline  
+**Author:** Aditya (System Architecture / Developer)  
 
-## 1. System Architecture Overview
-The Azathoth platform employs a decoupled, serverless-first architecture designed for high availability, zero-maintenance scaling, and strict perimeter security. It leverages edge hosting for static assets, serverless functions for middleware logic, a managed PostgreSQL instance for relational state, and an isolated cloud environment for remote administration.
+## 1. Architecture Overview
+Azathoth is a serverless-first, edge-mediated web platform designed for a personal portfolio with a community forum, role-based shared vault, and secure remote development access. It prioritizes:
 
-## 2. Network Flow & Security Boundaries
+* Low operational overhead and predictable scaling within modest traffic bounds.
+* Strong authorization guarantees through RLS-first design.
+* Controlled mutation pathways with API-gated writes and explicit compensation logic for distributed operations.
+* Strict Zero Trust and outbound-only infrastructure for remote access.
+* Defense-in-depth across edge, application, and database layers, with realistic handling of distributed system constraints.
+
+### Architectural Tenets
+* **Least Privilege by Default:** Enforced primarily at the database (RLS), not just the API.
+* **Client is Untrusted:** All sensitive operations undergo server-side validation and sanitization.
+* **Edge as Gatekeeper:** Handles routing, coarse-grained auth checks, rate limiting, and TLS termination.
+* **Database as Final Authority:** Authorization decisions occur at query execution time via PostgreSQL RLS.
+* **Outbound-Only Infrastructure:** No public ingress ports to any compute or database resources.
+* **Distributed Operations Require Explicit Compensation:** No true cross-service ACID transactions; use saga-like patterns or cleanup on failure.
+
+---
+
+## 2. System Architecture (Logical View)
+
+### Request Flow (Deterministic)
+1. **Client $\rightarrow$ Edge (Vercel CDN):**
+   * TLS 1.3 termination.
+   * Static asset delivery from edge cache.
+   * Initial route classification and rate limiting (backed by persistent KV store).
+2. **Edge Decision Point:**
+   * *Public routes* $\rightarrow$ direct response.
+   * *Protected routes* $\rightarrow$ JWT presence and signature validation in edge middleware.
+   * *API routes* $\rightarrow$ forward to Vercel Serverless Functions.
+3. **Application Layer (Vercel Serverless Functions):**
+   * Schema-based input validation.
+   * Business rule enforcement and server-side sanitization.
+   * Controlled database mutations with auditing and compensation logic for partial failures.
+4. **Data Layer (Supabase PostgreSQL + Storage):**
+   * JWT verified natively.
+   * RLS policies applied at the kernel level.
+   * Read-heavy operations may bypass API for latency when RLS permits.
+5. **Remote Access:**
+   * Browser $\rightarrow$ Cloudflare Zero Trust Access $\rightarrow$ Cloudflare Tunnel $\rightarrow$ OCI Ubuntu instance.
+   * No inbound ports exposed.
 
 ```mermaid
 flowchart TD
@@ -14,299 +52,294 @@ flowchart TD
 
     %% Security & Routing Layer
     subgraph Edge Security & Routing
-        DNS[DNS / SSL Termination]
+        DNS[DNS / TLS 1.3 Termination]
         VercelEdge[Vercel Edge Network]
+        KV[(Vercel KV / Upstash Redis)]
     end
 
     %% Compute Layer
     subgraph Middleware & Compute
         VercelFunc[Vercel Serverless API]
-        GHPages[GitHub Pages: Static UI]
+        GHPages[Static Routes / App Router]
     end
 
     %% Data & Infrastructure Layer
     subgraph Private Data & Infra
         Supabase[(Supabase: PostgreSQL + Auth)]
         Storage[Supabase Storage Buckets]
-        OCI[OCI: Ubuntu + Guacamole]
+        CF[Cloudflare Zero Trust Tunnel]
+        OCI[OCI: Ubuntu Dev Node]
     end
 
     %% Flows
-    User -- "HTTPS / TLS 1.3" --> DNS
-    DNS -- "Static GET" --> GHPages
-    DNS -- "Dynamic Requests" --> VercelEdge
-    
+    User -- "HTTPS" --> DNS
+    DNS -- "Static" --> GHPages
+    DNS -- "Dynamic" --> VercelEdge
+    VercelEdge <--> KV
     VercelEdge -- "JWT Validation" --> VercelFunc
-    VercelFunc -- "Signed SQL Queries" --> Supabase
-    VercelFunc -- "Proxy WebSocket" --> OCI
+    VercelFunc -- "Signed SQL (Port 6543)" --> Supabase
+    User -- "Storage Retrieval" --> Storage
     
-    User -- "Signed URL Request" --> Storage
+    %% Zero Trust Flow
+    User -- "Auth + Posture" --> CF
+    CF -- "Outbound SSH/RDP" --> OCI
 
     classDef edge fill:#f9f,stroke:#333,stroke-width:2px;
     classDef compute fill:#bbf,stroke:#333,stroke-width:2px;
     classDef db fill:#fbb,stroke:#333,stroke-width:2px;
     classDef security fill:#ddd,stroke:#ff0000,stroke-width:2px,stroke-dasharray: 5 5;
     
-    class GHPages,VercelEdge edge;
+    class GHPages,VercelEdge,KV edge;
     class VercelFunc compute;
     class Supabase,Storage,OCI db;
-    class DNS security;
+    class DNS,CF security;
+    
 ```
-'''
-## 3. Technology Stack & Architectural Decisions
 
-Every component in the stack was selected by weighing performance, maintenance overhead, and security against viable alternatives.
+## 3. Traffic & Load Assumptions (Design Constraint)
 
-| **Layer**            | **Chosen Technology**         | **Alternatives Rejected**             | **Justification for Choice**                                                                                                                                                    |
-| -------------------- | ----------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Frontend Hosting** | **GitHub Pages**              | AWS S3, Netlify                       | Native integration with the repository. Provides free, high-availability static hosting with zero configuration required.                                                       |
-| **App / API Logic**  | **Vercel**                    | AWS API Gateway + Lambda, Heroku      | Superior developer experience for serverless deployment. Handles dynamic routing and middleware edge-caching more efficiently than raw AWS Lambda setups.                       |
-| **Database**         | **PostgreSQL (via Supabase)** | MongoDB, Firebase (NoSQL)             | The forum and RBAC systems require complex relational mapping. PostgreSQL provides strict schema enforcement and native Row Level Security (RLS) which NoSQL alternatives lack. |
-| **Authentication**   | **Supabase Auth (GoTrue)**    | Auth0, Custom JWT logic               | Natively tied to the PostgreSQL database. Allows DB-level rejection of queries if the JWT token is invalid, eliminating a massive middleware attack vector.                     |
-| **Object Storage**   | **Supabase Storage**          | AWS S3                                | Keeps infrastructure centralized. Integrates directly with the same auth tokens used for the database, simplifying permission management for the Vault.                         |
-| **Remote Gateway**   | **Apache Guacamole**          | Chrome Remote Desktop, Direct SSH/RDP | Provides clientless HTML5 access. Prevents exposing vulnerable ports (22, 3389) to the public internet.                                                                         |
-| **Remote Server**    | **Oracle Cloud (OCI) Ubuntu** | AWS EC2, DigitalOcean                 | OCI provides a robust "Always Free" tier (ARM instances) that includes sufficient compute and bandwidth for a personal development server.                                      |
+|**Metric**|**Expected (Initial)**|**Upper Bound (Short Term)**|
+|---|---|---|
+|**Total Users**|50–500|~2,000|
+|**Concurrent Users**|10–50|~200|
+|**Requests/sec**|<100|~300|
+|**Database Size**|<5 GB|~20 GB|
 
-## 4. Security Architecture
+_Implications:_ No sharding, distributed caching, or queues required yet. Design remains simple and efficient.
 
-Security is enforced at three distinct layers: the Edge, the Application, and the Database.
+---
 
-### 4.1. Data in Transit & Perimeter Defense
+## 4. Technology Stack
 
-- All traffic is strictly enforced over **TLS 1.3**. Unencrypted HTTP requests are automatically upgraded or dropped at the DNS level.
+|**Layer**|**Technology**|**Role**|
+|---|---|---|
+|**Edge + Hosting**|Vercel (Next.js App Router + Edge)|CDN, routing, middleware|
+|**Rate Limiting Store**|Vercel KV (or Upstash Redis)|Persistent state for edge rate limiting|
+|**API Layer**|Vercel Serverless Functions|Secure execution boundary|
+|**Database**|Supabase (PostgreSQL + PostgREST)|Relational data + RLS|
+|**Authentication**|Supabase Auth (JWT)|JWT issuance + validation|
+|**Storage**|Supabase Storage (S3-compatible)|Object storage with RLS-aligned permissions|
+|**Remote Access**|Cloudflare Zero Trust + Tunnel|Secure clientless access|
+|**Dev Compute**|Oracle Cloud Infrastructure (ARM)|Persistent Ubuntu dev node|
+
+---
+
+## 5. Trust Boundaries & Data Flow
+
+### 5.1 Trust Zones
+
+|**Zone**|**Trust Level**|**Notes**|
+|---|---|---|
+|**Client**|Untrusted|Can be fully tampered with; never trusted for authorization.|
+|**Edge**|Semi-trusted|Enforces coarse controls, rate limiting, and initial JWT checks.|
+|**API**|Trusted|Validates intent, sanitizes input, and orchestrates logic.|
+|**Database**|Trusted (Authoritative)|Final access control via RLS and schema constraints.|
+|**OCI**|Isolated|No inbound access; reachable only via outbound tunnel.|
+
+### 5.2 Operation Routing Matrix
+
+|**Operation**|**Path**|**Notes**|
+|---|---|---|
+|**Public reads**|Client $\rightarrow$ Supabase (RLS)|Direct for performance|
+|**Authenticated reads**|Client $\rightarrow$ Supabase (RLS)|RLS filters rows|
+|**Writes / Mutations**|Client $\rightarrow$ API $\rightarrow$ Supabase|Server-side validation + audit|
+|**Admin operations**|Client $\rightarrow$ API $\rightarrow$ Supabase|Strict role + RLS|
+|**Remote access**|Client $\rightarrow$ CF Zero Trust $\rightarrow$ OCI|Identity + posture checked|
+
+---
+
+## 6. Security Architecture
+
+### 6.1 Defense-in-Depth Model
+
+- **Edge:** TLS 1.3, routing, rate limiting, JWT presence/signature validation, CSP headers.
+- **API:** Input validation (Zod schemas), business rules, server-side sanitization (e.g., Markdown safe mode), audit logging.
+- **Database:** RLS policies, foreign key constraints, statement timeouts, connection pooling via Supavisor.
+
+### 6.2 Authentication
+
+- Stateless JWTs issued by Supabase Auth.
+- Stored in `HttpOnly`, `Secure`, `SameSite=Strict` cookies.
+- **Token Lifecycle:** 60-minute TTL; automatic refresh attempts via Supabase client at T-5 minutes.
+- **Realistic Limitation & Mitigation:** The `onAuthStateChange` listener may not reliably trigger in background tabs. Frontend must gracefully handle `401 Unauthorized` responses by redirecting to `/login` without unhandled exceptions.
+
+### 6.3 Authorization (RLS)
+
+- **Roles:** `public`, `associate`, `admin`.
+- Enforces row-level visibility and operation-level permissions.
+- **Hard Requirement:** RLS must be enabled on every table and on `storage.objects` before any production deployment.
+- **Validation Practices:** All policies version-controlled in Git. CI pipeline includes tests simulating roles. Indexes required on RLS columns (e.g., `role`, `access_tier`, `author_id`).
     
-- Static assets are served via CDN, mitigating basic DDoS vectors by caching content at the edge.
 
-### 4.2. Access Control & Identity (JWT)
+### 6.4 Threat Model Coverage
 
-- The system utilizes stateless JSON Web Tokens (JWT) for authentication.
+|**Threat**|**Mitigation**|
+|---|---|
+|**SQL Injection**|Parameterized queries via PostgREST + API mediation|
+|**XSS**|Server-side sanitization + strict CSP headers|
+|**CSRF**|`SameSite=Strict` cookies + strict origin/CORS validation|
+|**IDOR**|RLS enforcement + UUID decoupling from business logic|
+|**Credential Stuffing**|Edge rate limiting + account lockout policies + logging|
+|**Remote Access Bypass**|CF Zero Trust (SSO/MFA + device posture) + outbound tunnel|
+
+### 6.5 Network Security
+
+- **Database port 5432:** Not publicly accessible (Supabase default).
+- **OCI instance:** Security Lists drop all inbound traffic; only outbound Cloudflare Tunnel allowed.
+
+### 6.6 Rate Limiting Strategy
+
+- **Implementation:** Vercel Edge Middleware is stateless. We utilize Vercel KV (or Upstash Redis) as the backing store for rate-limit state (IP-based counters).
     
-- Session tokens are stored in secure, `HttpOnly`, `SameSite=Strict` cookies to prevent Cross-Site Scripting (XSS) payload extraction.
+- **Endpoints:**
+    - Public API: 10 req/sec per IP
+    - Auth routes: 5 req/min per IP
+    - Admin routes: 2 req/sec per IP
+
+
+---
+
+## 7. Database Architecture
+
+### 7.1 Design Principles
+
+- Fully normalized schema with strict foreign key constraints.
+- Minimal use of JSONB for core relational data.
+- Soft deletes (`is_archived`) and audit logging (`audit_logs`) for governance.
+
+### 7.2 Connection Pooling Topology (Critical Constraint)
+
+- **Rule:** Serverless functions must strictly route through the **Supavisor connection pooler via port `6543`** (IPv4 Transaction Mode). Bypassing the pooler using the direct engine port (`5432`) will exhaust PostgreSQL connections and crash the database under concurrent loads.
     
-- Vercel edge middleware intercepts all requests to `/shared-vault` and `/admin-dashboard` to verify the JWT signature before invoking any compute resources.
 
-### 4.3. Data at Rest & Row Level Security (RLS)
+### 7.3 Transactions & Multi-Step Operations (Compensation Logic)
 
-- Storage buckets and database volumes are encrypted at rest using AES-256.
+- **Constraint:** Supabase Storage is an S3-compatible HTTP API. A file upload cannot be wrapped inside a PostgreSQL `BEGIN/COMMIT` block from a Vercel function.
     
-- **Row Level Security (RLS):** This is the ultimate fallback. Even if a malicious actor bypasses the Vercel API and attempts to query the database directly, the PostgreSQL engine executes the query against the user's JWT `role_id`. If an "Associate" tries to read an "Admin" file, the database drops the request at the kernel level.
+- **Saga/Compensation Pattern:**
+    1. Upload file to Supabase Storage.
+    2. On success, `INSERT` into `vault_metadata` table.
+    3. On `INSERT` failure/timeout: Immediately issue a `DELETE` request to Supabase Storage to remove the orphaned file.
+
+- **Garbage Collection (Safety Net):** A scheduled Supabase `pg_cron` script runs weekly to delete objects in Storage older than 24 hours that lack a corresponding UUID in `vault_metadata`, mitigating "Ghost Files" caused by serverless hard timeouts where the `catch` block fails to execute.
     
-- The OCI instance firewall (Security Lists) is configured to drop all incoming TCP connections except those originating from the Vercel Guacamole proxy, completely hiding the server from public IP scanners.
 
-### 4.4. Distributed Denial of Service (DDoS) Mitigation
-To protect against both volumetric (Layer 3/4) and application-layer (Layer 7) attacks, mitigation strategies are enforced across all three infrastructure providers.
+---
 
-* **Edge/API Layer (Vercel & GitHub Pages):** * Vercel's Edge Network automatically absorbs volumetric attacks (UDP reflection, SYN floods) and drops malicious packets before they reach the serverless functions.
-  * **Rate Limiting:** Vercel middleware enforces strict rate limiting on all `POST` requests (e.g., the Contact Form and Authentication routes) to prevent Layer 7 HTTP flood attacks and credential stuffing.
-* **Database Layer (Supabase):**
-  * Direct public connection to the PostgreSQL port (5432) is disabled.
-  * Connection exhaustion attacks are mitigated using Supabase's built-in connection pooler (Supavisor), which queues and manages active connections rather than allowing concurrent floods to crash the database engine.
-  * Statement timeouts are enforced to kill maliciously slow queries designed to lock up database resources.
-* **Infrastructure Layer (OCI & Guacamole):**
-  * The Oracle Cloud Virtual Cloud Network (VCN) Security Lists are configured to silently drop all external ICMP (Ping) requests and block all inbound TCP/UDP traffic.
-  * The only allowed ingress traffic is restricted to the specific IP ranges of the Vercel deployment, making the Guacamole server completely "dark" to public internet scanners and botnets.
+## 8. API Architecture
 
-## 5. Database Schema & Data Architecture
+**Responsibilities:**
 
-The database is built on PostgreSQL. To guarantee atomicity and handle bulk data efficiently, the schema strictly avoids JSONB blobs for relational data, enforces foreign key constraints to prevent orphaned records, and utilizes B-Tree indexing on all query-heavy columns.
+- Strict input validation using schemas.
+- Mutation control and business logic.
+- Server-side sanitization.
+- Explicit compensation logic for distributed operations (cleanup of orphaned storage objects).
+- Secret handling (never exposed to client).
 
-### 5.1. Core Tables & Normalization
+---
 
-#### Table: `profiles`
-Maps to the hidden Supabase `auth.users` system table. Stores public and RBAC data.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `uuid` | PK, FK (`auth.users.id`) CASCADE | Primary identifier. |
-| `role` | `varchar(20)` | NOT NULL, DEFAULT 'public' | Enforces RBAC (`public`, `associate`, `admin`). |
-| `display_name` | `varchar(50)` | NOT NULL | Publicly visible name for forum posts. |
-| `created_at` | `timestamptz` | NOT NULL, DEFAULT `now()` | Timezone-aware creation timestamp. |
+## 9. Remote Access Architecture
 
-#### Table: `forum_posts`
-Stores all community discussions. Normalized to ensure rapid bulk querying without duplicating user data.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `uuid` | PK, DEFAULT `uuid_generate_v4()` | Unique post identifier. |
-| `author_id` | `uuid` | FK (`profiles.id`) SET NULL | Links post to author. Becomes NULL if user deleted. |
-| `title` | `varchar(150)` | NOT NULL | Post header. |
-| `body` | `text` | NOT NULL | Sanitized Markdown/text payload. |
-| `is_archived` | `boolean` | DEFAULT `false` | Soft-delete flag. Preserves data atomicity. |
-| `created_at` | `timestamptz`| NOT NULL, DEFAULT `now()` | Timestamp of post. |
+### 9.1 Implementation Details
 
-*Index Strategy:* B-Tree index on `created_at` (DESC) and `author_id` to handle bulk loading on the forum frontend.
+- **Cloudflare Tunnel:** `cloudflared` daemon runs on the OCI Ubuntu instance, establishing an outbound-only secure tunnel. No inbound TCP/UDP ports are opened on the OCI firewall.
+- **Browser-Based Access:** Cloudflare’s Browser-rendered SSH terminal. (Optional fallback: `xrdp` + Browser RDP).
 
-#### Table: `vault_metadata`
-Stores metadata for files hosted in Supabase Storage. Separating metadata from physical storage ensures the database remains highly performant during bulk file operations.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `uuid` | PK, DEFAULT `uuid_generate_v4()` | Unique file identifier. |
-| `storage_path` | `text` | NOT NULL, UNIQUE | Exact path in the Supabase Storage bucket. |
-| `file_name` | `varchar(255)` | NOT NULL | Human-readable name. |
-| `access_tier`| `varchar(20)` | NOT NULL | Defines who can read it (`associate`, `admin`). |
-| `size_bytes` | `bigint` | NOT NULL | Used for storage quota calculations. |
+### 9.2 Fallback Strategy (Break-Glass Procedure)
 
-#### Table: `audit_logs`
-An append-only ledger tracking all authentication and data-modification events. Crucial for system governance.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `log_id` | `bigserial` | PK | Sequential integer for rapid bulk inserts. |
-| `actor_id` | `uuid` | FK (`profiles.id`) | Who triggered the event (can be null for system). |
-| `action` | `varchar(50)` | NOT NULL | e.g., `LOGIN_FAILED`, `FILE_DELETED`, `POST_CREATED`. |
-| `ip_address` | `inet` | NULL | IPv4/IPv6 address of the actor. |
-| `timestamp` | `timestamptz`| NOT NULL, DEFAULT `now()` | Exact time of the event. |
+If Cloudflare is completely unavailable, the tunnel cannot be accessed.
 
-*Edge Case Mitigation:* If the system generates millions of logs, this table will be partitioned by month (`PARTITION BY RANGE (timestamp)`) to maintain query speed and allow for bulk archival of old logs.
+|**Level**|**Method**|**Trigger / Notes**|
+|---|---|---|
+|**Primary**|CF Browser SSH|Normal dev access|
+|**Secondary**|CF Browser RDP|Full GUI desktop needed|
+|**Emergency**|OCI Console Override|**Break-Glass only.** 1) Log into OCI Web Console. 2) Edit VCN Security List to allow TCP 22 from current IP. 3) SSH in. 4) **Immediately revert** to deny-all.|
 
-### 5.2. Row Level Security (RLS) Policies
+### 9.3 Operational Notes (Abuse Prevention)
 
-To prevent unauthorized bulk scraping or data manipulation, security is enforced at the database kernel level using RLS. Even if an API endpoint is compromised, the database will reject the query.
+- **OCI "Always Free" Keep-Alive:** To prevent Oracle from reclaiming the instance for low utilization, do _not_ run synthetic CPU-spiking scripts (like `stress-ng`), as Oracle's algorithms flag this as crypto-mining and will terminate the account. Instead, schedule legitimate network/compute tasks via cron (e.g., `sudo apt-get update && sudo apt-get upgrade -y` or pulling/pruning Docker images).
 
-* **`profiles` Table:**
-  * *Read:* `TRUE` (Everyone can read display names for the forum).
-  * *Update:* `auth.uid() = id` (Users can only update their own display name) OR `auth.jwt() ->> 'role' = 'admin'`.
-* **`forum_posts` Table:**
-  * *Read:* `is_archived = false` (Public can read active posts).
-  * *Insert:* `auth.uid() IS NOT NULL` (Must be authenticated).
-  * *Update/Delete:* `auth.uid() = author_id` OR `auth.jwt() ->> 'role' = 'admin'`.
-* **`vault_metadata` & Storage Buckets:**
-  * *Read (Associates):* `auth.jwt() ->> 'role' IN ('associate', 'admin') AND access_tier = 'associate'`.
-  * *Read (Admin):* `auth.jwt() ->> 'role' = 'admin'`.
-  * *Write/Delete:* `auth.jwt() ->> 'role' = 'admin'` (Only Admin can modify the vault).
-* **`audit_logs` Table:**
-  * *Read:* `auth.jwt() ->> 'role' = 'admin'` (Strictly Admin only).
-  * *Insert:* Executed via PostgreSQL Triggers with `SECURITY DEFINER` privileges. Users cannot manually insert or modify logs.
-  * *Update/Delete:* `FALSE` (Immutable table).
+---
 
-### 5.3. Edge Case Handling & Data Integrity
-1. **Orphaned Data:** If a user account is deleted, their `forum_posts` are retained but `author_id` is set to `NULL` (via `ON DELETE SET NULL`), preserving the community thread context without violating foreign key constraints. 
-2. **Concurrent Bulk Writes:** The system uses transaction blocks (`BEGIN` ... `COMMIT`) when handling multi-table operations (e.g., uploading a file to storage AND writing to `vault_metadata`). If the storage upload fails, the database write automatically rolls back, maintaining perfect atomicity.
-3. **Pagination & Load Limits:** All `SELECT` queries against `forum_posts` and `audit_logs` are strictly paginated using `LIMIT` and `OFFSET` to prevent Out Of Memory (OOM) errors during bulk retrieval.
+## 10. Observability & Monitoring
 
-### 5.4. Threat Mitigation & Database Defence
+- **Logging:** Structured logs for API requests, auth events, database operations, and remote access.
+- **Correlation:** Request ID generated at Vercel Edge and propagated through API calls for tracing.
+- **Alerts:** Triggered on authentication failure spikes, elevated DB latency, or KV store connection errors.
 
-To maintain strict governance and protect against common web vulnerabilities (OWASP Top 10), the database and API layers enforce the following defensive protocols:
+---
 
-* **SQL Injection (SQLi) Prevention:** The system utilizes PostgREST for all database interactions. All API requests are automatically translated into parameterized queries (prepared statements). User input is never concatenated directly into executable SQL strings, rendering standard injection attacks mathematically impossible at the application layer.
-* **Insecure Direct Object Reference (IDOR) Prevention:** Resource IDs (UUIDs) are decoupled from access rights. Row Level Security (RLS) acts as a strict gatekeeper. Even if an attacker discovers the UUID of a restricted `vault_metadata` record, the PostgreSQL kernel will return a `404 Not Found` equivalent if the requester's JWT `role` does not match the required `access_tier`.
-* **Cross-Site Scripting (XSS) Mitigation:** All inputs targeting the `forum_posts` and `inquiries` tables undergo strict server-side sanitization to strip executable `<script>` tags and malicious HTML attributes before the `INSERT` transaction is committed.
-* **Cross-Site Request Forgery (CSRF) Mitigation:** Authentication state is managed via secure, `HttpOnly` cookies strictly bound to the `adarshsadanand.in` domain utilizing the `SameSite=Strict` attribute, preventing unauthorized cross-origin requests from utilizing an active session.
+## 11. Failure Scenarios & Mitigation
 
-### 5.5. Availability, Maintenance & GRC Protocols
+|**Scenario**|**Impact**|**Mitigation**|
+|---|---|---|
+|**Supabase Outage**|DB/Storage unavailable|Graceful degradation; read-only cache fallback; retry with backoff.|
+|**Vercel Outage**|API down|Static content remains; public reads continue via edge cache.|
+|**Cloudflare Outage**|Remote access down|Use OCI break-glass SSH procedure.|
+|**Partial Upload Failure**|Orphaned files|Application-level compensation (DELETE on fail) + `pg_cron` garbage collection.|
+|**KV Store Failure**|Rate limits bypassed|Fallback to Vercel WAF rules; alert on KV connection timeouts.|
+|**RLS Policy Bug**|Data leak / block|Strict CI testing + staged rollouts via preview environments.|
 
-To ensure continuous operation and compliance with standard data privacy frameworks, the database layer enforces strict lifecycle and availability controls.
+---
 
-* **High Availability & Disaster Recovery (DR):** The PostgreSQL database utilizes Write-Ahead Logging (WAL) to enable Point-in-Time Recovery (PITR). Automated physical backups are executed daily by the infrastructure provider, ensuring a strict Recovery Point Objective (RPO) of 24 hours in the event of catastrophic data corruption.
+## 12. CI/CD & Secrets Management
 
-* **Automated Log Rotation:** To prevent storage exhaustion and maintain query performance, system audit logs are subjected to automated lifecycle management. A `pg_cron` background worker executes a monthly clean-up script, archiving or permanently dropping records in the `audit_logs` table that exceed a 365-day retention period.
+- **Pipeline:** Git push triggers automated preview and production deploys on Vercel.
+- **Environments:** Isolated dev / staging / prod.
+- **Secret Policy:**
+    - Public/anon keys: Safe for client-side (`NEXT_PUBLIC_`).
+    - Service role keys, KV tokens, Tunnel tokens: Server-only (`process.env.`).
+- **Migrations:** Supabase CLI manages schema, RLS policies, and functions (version-controlled in Git).
 
-* **PII Sanitization & The Right to be Forgotten (RTBF):** The schema is designed to respect user privacy while maintaining referential integrity. When an authenticated Associate requests account deletion, a cascading database function is triggered. This function permanently purges the user's Personally Identifiable Information (PII) from the `profiles` table. Associated relational records, such as `forum_posts`, are retained to preserve community thread context, but their `author_id` is irreversibly nullified, rendering the data fully anonymized.
+---
 
-## 6. API Architecture & Middleware
+## 13. Cost Model
 
-The application utilizes a bifurcated API strategy. Standard CRUD operations leverage the Supabase PostgREST client for low-latency, RLS-secured database interactions. Complex business logic, secure proxying, and edge routing are handled by Vercel Serverless Functions.
+- **Vercel:** Function invocations, Edge middleware hits, and KV read/writes.
+- **Supabase:** Database compute, storage, and egress.
+- **Cloudflare / OCI:** Zero Trust usage and Always Free tier monitoring.
 
-### 6.1. Vercel Serverless Endpoints (Custom Logic)
+---
 
-These endpoints execute in secure Node.js environments. They are protected by Vercel's Edge rate-limiting and handle operations requiring secure secrets not exposed to the client.
+## 14. Known Limitations
 
-#### 1. Inbound Communications
-* **Endpoint:** `POST /api/contact`
-* **Purpose:** Receives payload from the public Portfolio "Contact Me" form, sanitizes the input, and executes a service-role insertion into the `inquiries` table.
-* **Payload Structure:**
-  ```json
-  {
-    "name": "string (max 100)",
-    "email": "string (valid email format)",
-    "message": "string (max 1000)"
-  }
-  ```
-- **Response Codes:**
-    - `200 OK`: Message accepted and stored.
-    - `429 Too Many Requests`: Rate limit exceeded (mitigates spam).
-    - `400 Bad Request`: Malformed email or missing fields.
+1. Distributed operations (Storage + DB) require explicit compensation logic—no cross-service ACID transactions.
+2. Background tab JWT refresh is not fully reliable; rely on 401 fallback handling.
+3. Vendor dependencies remain; design allows incremental migration paths.
+4. Serverless execution time limits for extremely long-running operations.
 
-#### 2. Remote Gateway Proxy (Guacamole)
+---
 
-- **Endpoint:** `GET /api/gateway/connect`
-- **Purpose:** Establishes a secure WebSocket/HTTP tunnel to the OCI Ubuntu instance.
-- **Security:** This endpoint mandates a valid Admin JWT. The Vercel function acts as a reverse proxy, translating the browser's HTML5 canvas commands into the Guacamole protocol, ensuring the OCI server's IP is never exposed to the client.
-- **Response:** Upgrades connection to WebSocket (101 Switching Protocols) or returns `403 Forbidden`.
+## 15. Future Enhancements
 
-### 6.2. Edge Middleware & Routing Security
+- Edge caching layer (Vercel KV expansion) for hot forum metadata.
+- Background job support if asynchronous processing needs emerge.
+- Full distributed tracing with OpenTelemetry.
 
-Vercel Edge Middleware (`middleware.ts`) intercepts all incoming HTTP requests _before_ they hit the serverless functions or static pages. It acts as the platform's traffic cop.
+---
 
-- **Execution Flow:**
-    1. Request arrives at `adarshsadanand.in/*`.
-    2. Middleware checks the requested path.
-    3. If the path is public (e.g., `/`, `/forum`, `/resume`), the request passes through immediately.
-    4. If the path is restricted (e.g., `/shared-vault`, `/admin-dashboard`), the middleware inspects the `sb-access-token` HTTP cookie.
-    5. The middleware cryptographically verifies the JWT signature.
-    6. If valid, it reads the `role_id`. If authorized, the request proceeds. If unauthorized or missing, the user is immediately redirected with a `302 Found` to `/login`.
+**Appendix Recommendations (To be maintained in Git):**
 
-- **Performance Impact:** Edge execution occurs globally at the CDN node closest to the user, resulting in sub-50ms latency for auth rejections, protecting downstream compute resources.
+- Full RLS policy examples (`USING` and `WITH CHECK`).
+- Vercel KV + Edge Middleware rate limiting implementation snippets.
+- OCI break-glass runbook with exact Security List steps.
 
-### 6.3. Supabase PostgREST Endpoints (Data Layer)
+---
+## 16. Operational Pain Points & Traps
 
-The frontend React/Vanilla JS application interacts directly with Supabase for standard state management, completely bypassing Vercel compute to reduce costs and latency.
+These critical constraints require strict adherence during development and ongoing operations to prevent systemic failures.
 
-- **`GET /rest/v1/forum_posts`:** Fetches active community threads. Appends `?limit=20&offset=0` for pagination. RLS ensures only `is_archived=false` records are returned.
-- **`POST /rest/v1/forum_posts`:** Client submits a new thread. The JWT is automatically passed in the `Authorization: Bearer <token>` header. The PostgreSQL database validates the token via RLS before committing the insert.
+### 1. The "Ghost File" Timeout Expiration
 
-## 7. Infrastructure, Deployment & CI/CD
+- **The Trap:** In Section 7.3, it is mandated that if the DB insert fails, the code deletes the orphaned storage file. However, if the Vercel Serverless Function hits its hard 10-second timeout exactly after the file finishes uploading, the function is killed instantly by Vercel. The `catch` block never runs, leaving the file orphaned forever.
+- **The Fix:** The compensation logic requires a safety net. The operations manual mandates a simple garbage collection cron job (e.g., a weekly Supabase `pg_cron` script) that looks for files in the Storage bucket older than 24 hours that have no matching UUID in the `vault_metadata` table, and deletes them.
 
-The deployment pipeline relies on strict separation of concerns to prevent secret leakage and ensure continuous availability across the decoupled stack.
+### 2. The OCI "Crypto-Miner" Flag
 
-### 7.1. CI/CD Pipeline & Secret Management
-* **Frontend Build (GitHub Actions):** Pushes to the `main` branch trigger a static build process deployed to GitHub Pages.
-  * *Constraint Mitigation (Secret Leakage):* The GitHub environment is strictly injected with the Supabase `anon` key. The `service_role` key is explicitly banned from the GitHub repository secrets to prevent accidental bundling into the public HTML.
-* **Backend Build (Vercel):** Pushes to the `main` branch trigger serverless function deployment.
-  * *Constraint Mitigation (CORS):* Vercel's `next.config.js` enforces strict Cross-Origin Resource Sharing (CORS), hard-dropping any `POST` or `GET` API requests that do not originate from `https://adarshsadanand.in`.
+- **The Trap:** In Section 9.3, a synthetic keep-alive is required if utilization drops. Previously, scripts like `stress-ng` were used to spike the CPU. Oracle runs aggressive, automated abuse-detection algorithms. A cron job that blindly maxes out the CPU for 5 minutes a day looks exactly like a crypto-mining script, causing Oracle to terminate the account with zero warning.
+- **The Fix:** Synthetic loads must mimic legitimate server maintenance. The cron job is set to run `sudo apt-get update && sudo apt-get upgrade -y` or pull a large, legitimate Docker container and delete it. This uses CPU and network, keeping the instance alive without triggering abuse alarms.
 
-### 7.2. Frontend Routing & State Management
-* **Routing Hack (SPA 404 Prevention):** Because GitHub Pages does not natively support Single Page Application (SPA) dynamic routing, a custom `404.html` script intercepts unmapped route requests (e.g., a direct link to `/admin-dashboard`), stores the requested path in `sessionStorage`, and redirects to the `index.html` root where the client-side router restores the intended view.
-* **Session State (Silent JWT Refresh):** To prevent data loss during long sessions (e.g., writing a blog post), the frontend implements Supabase's `onAuthStateChange`. A background worker silently requests a fresh JWT 5 minutes before expiry, ensuring authorized database transactions are not rejected due to timeouts.
+### 3. The Lost Supavisor Port
 
-## 7. Infrastructure, Deployment & CI/CD Protocols
-
-The deployment architecture enforces absolute decoupling of the static presentation layer from the dynamic execution environment. Pipeline orchestration is governed by strict environment variable isolation.
-
-### 7.1. CI/CD Pipeline & Cryptographic Secret Management
-* **Frontend Build Pipeline (GitHub Actions):** * Triggered on `push` to `refs/heads/main`.
-  * Executes standard `npm run lint` and `npm run build` routines.
-  * **Secret Isolation Matrix:** The build environment is injected exclusively with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The `SUPABASE_SERVICE_ROLE_KEY` is explicitly omitted from the repository's CI context to prevent static bundle contamination.
-* **Backend Build Pipeline (Vercel):**
-  * Evaluates serverless functions against the Node.js 18.x runtime environment.
-  * **CORS Preflight Configuration:** The `next.config.js` and edge middleware enforce strict Cross-Origin Resource Sharing rules. All Vercel endpoints explicitly return the following headers, dropping unauthorized cross-origin requests at the Edge:
-    ```http
-    Access-Control-Allow-Origin: [https://adarshsadanand.in](https://adarshsadanand.in)
-    Access-Control-Allow-Methods: GET, POST, OPTIONS
-    Access-Control-Allow-Headers: Authorization, Content-Type, sb-access-token
-    ```
-
-### 7.2. Frontend Routing State & Token Lifecycle
-* **SPA 404 Interception (GitHub Pages):** GitHub Pages lacks native rewrite capabilities for Single Page Applications. A custom `404.html` acts as a proxy script. It captures `window.location.pathname`, serializes it into `sessionStorage`, and executes a `window.location.replace('/')`. The `index.html` root intercepts this payload and dynamically updates the DOM history tree via `window.history.replaceState()`.
-* **JWT Lifecycle Worker:** Authentication relies on short-lived stateless JWTs (3600-second TTL). The client implements a background worker bound to the `supabase.auth.onAuthStateChange` listener. At $T-300$ seconds (5 minutes prior to token expiration), the worker issues an asynchronous `POST /auth/v1/token?grant_type=refresh_token` request to ensure uninterrupted `INSERT`/`UPDATE` capabilities during long-lived DOM sessions (e.g., editing the Private Blog).
-
-## 8. Remote Gateway & OCI Infrastructure Tunnelling
-
-The remote gateway architecture circumvents standard serverless TCP constraints by utilizing a decoupled WebSocket reverse proxy strategy, ensuring low-latency RDP/SSH translation for development workloads.
-
-### 8.1. Guacamole Daemon & Reverse Proxy Topography
-* **Constraint:** Vercel Serverless Functions enforce a hard execution timeout (10s–60s) and cannot sustain the persistent bidirectional WebSocket stream required by the `guacd` (Guacamole proxy daemon).
-* **Network Implementation:** * The Vercel API (`/api/gateway/connect`) is restricted solely to JWT validation and issuing a one-time cryptographic handshake.
-  * The OCI Ubuntu instance operates the `guacd` service locally.
-  * A `cloudflared` daemon (Cloudflare Tunnel) is installed on the OCI instance, establishing an outbound-only HTTPS tunnel to the Cloudflare edge network.
-  * The client browser establishes a direct `Upgrade: websocket` connection via the tunnel, completely bypassing Vercel compute.
-
-### 8.2. Infrastructure Retention & Egress Throttling
-* **OCI "Always Free" Synthetic Load Generator:** To prevent Oracle Cloud Infrastructure from classifying the ARM Ampere A1 instance as "idle" (triggering forced reclamation at <10% utilization), a local `cron` job executes a synthetic CPU load. 
-  * *Execution:* `0 2 * * * /usr/bin/stress-ng --cpu 2 --timeout 300s` (Forces 5 minutes of multi-core load daily).
-* **Cold Start Prevention:** A GitHub Action `cron` worker executes a synthetic `GET` request to the API gateway and a `SELECT 1` query to Supabase every 12 hours, ensuring the compute instances and database connection pools remain resident in memory.
-* **Egress Rate Limiting:** The Guacamole connection daemon is configured with a strict `client-timeout=900` (15 minutes). The Supabase Storage buckets enforce an `upload_size_limit` of 52428800 bytes (50MB) via RLS configurations to prevent outbound bandwidth exhaustion.
-
-## 9. Database Connection Pooling Topology
-
-* **Constraint:** Serverless environments exhibit high horizontal concurrency. Direct TCP connections to PostgreSQL (Port 5432) will cause connection queue exhaustion (OOM/Lockup) under load.
-* **Implementation:** The architecture utilizes **Supavisor** (a scalable connection pooler written in Elixir) operating in **Transaction Mode**. 
-  * Vercel functions must explicitly target port `6543` (the IPv4 pooler port) rather than the direct database engine.
-  * Transaction mode ensures that a database connection is acquired only for the duration of a single `BEGIN ... COMMIT` block, returning immediately to the pool. This allows 15 active database connections to safely multiplex over 1,000 concurrent serverless function invocations.
+- **The Trap:** When configuring the database connection strings, it is easy to default to the direct PostgreSQL port.
+- **The Fix:** Environment variables must explicitly use the Supavisor connection pooler port (**6543** for IPv4), not the direct database string (**5432**). If the direct port is used, serverless functions will crash the database under concurrent load.
