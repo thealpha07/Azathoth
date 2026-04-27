@@ -11,7 +11,7 @@ This project outlines the development of a multi-tiered web platform for adarshs
 * **Community Engagement:** Provide an open forum for public interaction and topic discussion.
 * **Secure File Management:** Replace external cloud drives with a self-hosted, secure vault for coursework, personal documents, and media.
 * **Controlled Data Sharing:** Implement strict Role-Based Access Control (RBAC) to allow specific users access to curated files and media galleries.
-* **Remote Workspace Integration:** Establish a secure, clientless web gateway to an Oracle Cloud Infrastructure (OCI) Ubuntu environment using Apache Guacamole for remote development and system administration.
+* **Remote Workspace Integration:** **Remote Workspace Integration:** Establish a secure, zero-trust remote access gateway to an Oracle Cloud Infrastructure (OCI) Ubuntu environment using Cloudflare Tunnels for secure system administration.
 
 ## 3. Target Audience
 * **General Public / Recruiters:** Accessing the landing page, resume downloads, and public forum.
@@ -26,7 +26,7 @@ This project outlines the development of a multi-tiered web platform for adarshs
 * Deployment of static assets via GitHub Pages and dynamic functions via Vercel.
 * Secure routing for contact inquiries and document retrieval.
 * Basic system telemetry and event logging for access control verification.
-* Integration of Apache Guacamole for secure, browser-based remote access to the OCI instance.
+	* Integration of Cloudflare Zero Trust and `cloudflared` tunnels for secure, outbound-only remote access to the OCI instance.
 
 ### 4.2. Out-of-Scope (For v1.0)
 * E-commerce or payment gateway integrations.
@@ -43,4 +43,4 @@ This project outlines the development of a multi-tiered web platform for adarshs
 * **BRD-06 (Admin Publishing Module):** The system must feature a personal blog module restricted exclusively to Admin read/write access.
 * **BRD-07 (Inbound Communications):** The system must include a functional "Contact Me" module that routes external inquiries directly to the system administrator without exposing backend email addresses.
 * **BRD-08 (Audit & Governance Logging):** The system must log critical authentication events, failed access attempts, and system errors to maintain a secure and auditable baseline.
-* **BRD-09 (Remote Workspace Gateway):** The system must provide the Admin tier with highly secure, browser-based remote access (via Apache Guacamole) to an OCI-hosted Ubuntu development environment.
+* **BRD-09 (Remote Workspace Gateway):** The system must provide the Admin tier with highly secure, clientless remote access to an OCI-hosted Ubuntu development environment, mediated strictly through an identity-aware Zero Trust network.
