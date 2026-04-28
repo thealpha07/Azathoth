@@ -1,10 +1,10 @@
 Req ID,Business Req (BRD),Functional Req (FRD),Technical Req (TRD),Target Release,Test Case ID,Status
-BRD-01,Public Portfolio & Asset Retrieval,FRD-PORT-01 & 02 ,TBD,v1.0,TBD,Pending
-BRD-02,Public Discussion Forum,FRD-FORUM-01 ,TBD,v1.0,TBD,Pending
-BRD-03,Unified Access Control,FRD-AUTH-01 ,TBD,v1.0,TBD,Pending
-BRD-04,Tiered File Vault,FRD-VAULT-01 & 02 ,TBD,v1.0,TBD,Pending
-BRD-05,Private Media Gallery,FRD-VAULT-01 ,TBD,v1.0,TBD,Pending
-BRD-06,Admin Publishing Module,FRD-BLOG-01 ,TBD,v1.0,TBD,Pending
-BRD-07,Inbound Communications,FRD-COM-01 ,TBD,v1.0,TBD,Pending
-BRD-08,Audit & Governance Logging,FRD-AUTH-01 ,TBD,v1.0,TBD,Pending
-BRD-09 ,Remote Workspace Gateway ,FRD-GATEWAY-01 ,TBD,v1.0,TBD,Pending
+BRD-01,Public Portfolio & Asset Retrieval,FRD-PORT-01 & 02 ,TRD-Sec-2 & TRD-Sec-6.6 ,v1.0,TBD,Pending
+BRD-02,Public Discussion Forum,FRD-FORUM-01 ,TRD-Sec-7.1 & TRD-Sec-6.4 ,v1.0,TBD,Pending
+BRD-03,Unified Access Control,FRD-AUTH-01 ,TRD-Sec-6.2 & TRD-Sec-6.3 ,v1.0,TBD,Pending
+BRD-04,Tiered File Vault,FRD-VAULT-01 & 02 ,TRD-Sec-7.1 & TRD-Sec-7.3 ,v1.0,TBD,Pending
+BRD-05,Private Media Gallery,FRD-VAULT-01 ,TRD-Sec-6.3 ,v1.0,TBD,Pending
+BRD-06,Admin Publishing Module,FRD-BLOG-01 ,TRD-Sec-8 ,v1.0,TBD,Pending
+BRD-07,Inbound Communications,FRD-COM-01 ,TRD-Sec-8 & TRD-Sec-6.6 ,v1.0,TBD,Pending
+BRD-08,Audit & Governance Logging,FRD-AUTH-01 ,TRD-Sec-7.1 & TRD-Sec-10 ,v1.0,TBD,Pending
+BRD-09 ,Zero Trust Workspace Gateway,FRD-GATEWAY-01 ,TRD-Sec-8.1 ,v1.0,TBD,Pending

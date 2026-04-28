@@ -98,13 +98,16 @@ This matrix defines the baseline permissions across the platform's features.
 * **Exception Path:**
     * *E1: Unauthorized Access:* If a guest attempts to hit the route, the middleware intercepts and redirects to `/login`.
 
-### 5.2. FRD-VAULT-02: Admin Drive Management
+### 5.2. FRD-VAULT-02: Admin Drive Management (Saga Upload)
 * **Actor:** Admin
-* **Trigger:** Admin uploads a document (e.g., MTech coursework, PDF).
+* **Trigger:** Admin uploads a document.
 * **Main Success Scenario:**
-    1. Admin drags and drops a file into the `/admin-dashboard/drive` UI.
-    2. System streams the file to the secure Admin bucket in Supabase.
-    3. UI displays a progress bar, then updates the file list upon successful upload.
+    1. Admin drags and drops a file into the UI.
+    2. System streams the file to the Supabase Storage bucket.
+    3. UPON SUCCESS: System writes the file metadata to the `vault_metadata` PostgreSQL table.
+    4. UI displays a success toast and updates the file list.
+* **Exception Path (Compensation):**
+    * *E1: Metadata Write Failure:* If the database insert fails or times out after the file uploads, the system immediately issues a `DELETE` command to the Storage bucket, removing the orphaned file, and displays an "Upload failed. Please try again" error to the user.
 
 ---
 
@@ -119,13 +122,13 @@ This matrix defines the baseline permissions across the platform's features.
     2. Post is saved to the `private_blog` table.
     3. System renders the Markdown into HTML for the Admin reading view.
 
-### 6.2. FRD-GATEWAY-01: OCI Remote Workspace Access
+### 6.2. FRD-GATEWAY-01: Zero Trust Remote Workspace Access
 * **Actor:** Admin
-* **Trigger:** Admin clicks the "Launch Workspace" button in the Admin Dashboard.
+* **Trigger:** Admin navigates to the dedicated Cloudflare Access URL (e.g., `ssh.adarshsadanand.in`).
 * **Main Success Scenario:**
-    1. System validates the Admin JWT.
-    2. System initiates a secure proxy connection to the Apache Guacamole instance hosted on the OCI Ubuntu server.
-    3. The Ubuntu desktop environment renders seamlessly within an HTML5 canvas in the browser.
-    4. Admin can interact with the remote terminal and GUI without installing local client software.
-* **Exception Path:**
-    * *E1: Instance Unreachable:* If the OCI server is down, the system displays: "Remote instance unavailable. Check cloud console status."
+    1. Cloudflare intercepts the request and demands SSO/Identity verification.
+    2. Admin authenticates via the designated Identity Provider.
+    3. Cloudflare verifies identity and device posture, then proxies the connection through the outbound tunnel.
+    4. Cloudflare renders a Browser-based SSH terminal (or RDP session) directly in the browser.
+* **Exception Path (Break-Glass):**
+    * *E1: Cloudflare Outage:* Admin manually logs into the OCI Web Console, temporarily alters the VCN Security List to allow their specific IP on Port 22, executes the SSH session, and reverts the rule upon exit.
